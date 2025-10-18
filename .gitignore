@@ -13,7 +13,6 @@ pip-delete-this-directory.txt
 
 # PyTorch
 *.pth
-*.ckpt
 *.pt
 
 # Data
