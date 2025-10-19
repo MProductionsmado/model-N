@@ -514,7 +514,7 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         # Use adaptive schedule if size is provided
         if size is not None and size in self.beta_schedules:
             # Compute alphas_cumprod for this size
-            betas_size = self.beta_schedules[size]
+            betas_size = self.beta_schedules[size].to(t.device)  # MOVE TO SAME DEVICE
             alphas_size = 1.0 - betas_size
             alphas_cumprod_size = torch.cumprod(alphas_size, dim=0)
             alpha_cumprod_t = alphas_cumprod_size[t]
@@ -619,7 +619,7 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
             
             # Use ADAPTIVE schedule if available
             if size in self.beta_schedules:
-                betas_size = self.beta_schedules[size]
+                betas_size = self.beta_schedules[size].to(t.device)  # MOVE TO SAME DEVICE
                 alphas_size = 1.0 - betas_size
                 alphas_cumprod_size = torch.cumprod(alphas_size, dim=0)
                 alpha_cumprod_t_prev = alphas_cumprod_size[t - 1]
