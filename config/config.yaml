@@ -93,22 +93,4 @@ hardware:
 blocks:
   air: 0
   oak_leaves: 1  # Count: 513,807
-  birch_leaves: 2  # Count: 122,651
-  jungle_leaves: 3  # Count: 114,375
-  spruce_leaves: 4  # Count: 103,554
-  oak_wood: 5  # Count: 86,032
-  snow: 6  # Count: 60,163
-  tall_grass: 7  # Count: 58,464
-  birch_wood: 8  # Count: 51,290
-  light_gray_concrete: 9  # Count: 40,949
-  spruce_wood: 10  # Count: 39,180
-  yellow_stained_glass_pane: 11  # Count: 38,470
-  sunflower: 12  # Count: 36,600
-  dark_oak_leaves: 13  # Count: 31,928
-  andesite: 14  # Count: 30,111
-  vine: 15  # Count: 24,225
-  yellow_wool: 16  # Count: 23,335
-  spruce_fence: 17  # Count: 21,864
-  yellow_glazed_terracotta: 18  # Count: 20,239
-  green_stained_glass_pane: 19  # Count: 19,967
-  yellow_concrete: 20  # Count: 19,942
+  oak_wood: 2
