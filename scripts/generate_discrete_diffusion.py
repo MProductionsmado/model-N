@@ -38,8 +38,12 @@ def main():
                        help='Number of denoising steps (50=fast, 1000=best quality)')
     parser.add_argument('--guidance-scale', type=float, default=7.5,
                        help='Classifier-Free Guidance scale (1.0=no guidance, 3.0-7.5=strong prompt following)')
-    parser.add_argument('--temperature', type=float, default=1.0,
-                       help='Temperature for sampling (<=0.3 more deterministic, >1.0 more diverse)')
+    parser.add_argument('--temperature', type=float, default=0.9,
+                       help='Temperature for sampling (0.7=conservative, 1.0=balanced, 1.2=diverse)')
+    parser.add_argument('--top-k', type=int, default=0,
+                       help='Top-k filtering (0=auto-adaptive, 10-20=recommended)')
+    parser.add_argument('--top-p', type=float, default=1.0,
+                       help='Nucleus sampling (1.0=auto-adaptive, 0.8-0.9=recommended)')
     parser.add_argument('--sample-mode', type=str, default='argmax', choices=['argmax','multinomial'],
                        help='argmax: pick most likely block; multinomial: sample per voxel')
     parser.add_argument('--seed', type=int, default=None,
@@ -102,16 +106,20 @@ def main():
     logger.info(f"Generating {args.num_samples} sample(s)...")
     logger.info(f"Sampling steps: {args.sampling_steps}")
     logger.info(f"Guidance scale: {args.guidance_scale}")
+    logger.info(f"Temperature: {args.temperature}, Top-k: {args.top_k}, Top-p: {args.top_p}")
     
     with torch.no_grad():
-        # Generate using discrete diffusion
+        # Generate using discrete diffusion with IMPROVED SAMPLING
         # Returns probabilities over classes (B, C, D, H, W)
         generated_probs = model.model.generate(
             text_embed=text_embed,
             size=size,
             num_samples=args.num_samples,
             sampling_steps=args.sampling_steps,
-            guidance_scale=args.guidance_scale
+            guidance_scale=args.guidance_scale,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p
         )
         
         if args.temperature != 1.0:

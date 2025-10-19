@@ -6,6 +6,10 @@ Better for categorical data like Minecraft blocks
 Based on:
 - "Argmax Flows and Multinomial Diffusion" (Hoogeboom et al. 2021)
 - "Structured Denoising Diffusion Models in Discrete State-Spaces" (Austin et al. 2021)
+
+IMPROVEMENTS:
+- Adaptive noise scheduling based on voxel resolution
+- Top-k and nucleus (top-p) sampling for better quality
 """
 
 import torch
@@ -13,6 +17,74 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Tuple, Optional
 import math
+
+
+def improved_sampling(
+    probs: torch.Tensor, 
+    temperature: float = 1.0, 
+    top_k: int = 0, 
+    top_p: float = 1.0
+) -> torch.Tensor:
+    """
+    Enhanced sampling with top-k and nucleus (top-p) filtering.
+    Prevents low-probability blocks from being sampled.
+    
+    Args:
+        probs: Probability distribution (B*D*H*W, num_classes) - MUST BE PROBS!
+        temperature: Sampling temperature (lower = more deterministic)
+        top_k: Keep only top k classes (0 = disabled)
+        top_p: Nucleus sampling threshold (1.0 = disabled)
+    
+    Returns:
+        Sampled indices (B*D*H*W,)
+    """
+    # CRITICAL FIX: Work directly with probabilities, not logits
+    # Temperature scaling on probabilities
+    if temperature != 1.0:
+        probs = probs ** (1.0 / max(temperature, 1e-6))
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+    
+    # Top-k filtering on probabilities
+    if top_k > 0:
+        top_k = min(top_k, probs.size(-1))
+        values, indices = torch.topk(probs, top_k, dim=-1)
+        
+        # Create mask for top-k
+        mask = torch.zeros_like(probs)
+        mask.scatter_(-1, indices, 1.0)
+        
+        # Zero out non-top-k probabilities
+        probs = probs * mask
+        
+        # Renormalize
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+    
+    # Nucleus (top-p) sampling on probabilities
+    if top_p < 1.0:
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        
+        # Find cutoff: first index where cumulative > top_p
+        sorted_indices_to_remove = cumulative_probs > top_p
+        # Shift right to keep first token above threshold
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+        
+        # Set removed probabilities to zero in sorted order
+        sorted_probs[sorted_indices_to_remove] = 0.0
+        
+        # Scatter back to original order
+        probs = torch.zeros_like(probs).scatter_(-1, sorted_indices, sorted_probs)
+        
+        # Renormalize
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+    
+    # Handle numerical issues
+    if torch.isnan(probs).any() or (probs.sum(dim=-1) == 0).any():
+        probs = torch.ones_like(probs) / probs.size(-1)
+    
+    # Final sampling
+    return torch.multinomial(probs, num_samples=1).squeeze(-1)
 
 
 class SinusoidalPositionEmbeddings(nn.Module):
@@ -327,14 +399,83 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         
         # Transition matrix schedule (probability of staying in same state)
         # At t=0: almost always stay, at t=T: uniform distribution
+        # ADAPTIVE: Different schedules for different resolutions
+        self.beta_schedules = {}
+        for size_name, size_config in config['model']['sizes'].items():
+            dims = size_config['dims']
+            betas = self._adaptive_cosine_beta_schedule(
+                self.num_timesteps, 
+                voxel_size=dims
+            )
+            # Use register_buffer with persistent=False for backward compatibility
+            # Old checkpoints won't have these, but we can compute them on-the-fly
+            self.register_buffer(f'betas_{size_name}', betas, persistent=False)
+            self.beta_schedules[size_name] = betas
+        
+        # Also keep default for backward compatibility
         betas = self._cosine_beta_schedule(self.num_timesteps)
         self.register_buffer('betas', betas)
         
-        # Cumulative product of (1 - beta)
+        # Cumulative product of (1 - beta) - will be computed per size
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         self.register_buffer('alphas', alphas)
         self.register_buffer('alphas_cumprod', alphas_cumprod)
+    
+    def _ensure_beta_schedules(self):
+        """
+        Ensure beta schedules exist for all sizes.
+        Called during inference to handle old checkpoints.
+        """
+        for size_name, size_config in self.config['model']['sizes'].items():
+            if not hasattr(self, f'betas_{size_name}'):
+                dims = size_config['dims']
+                betas = self._adaptive_cosine_beta_schedule(
+                    self.num_timesteps, 
+                    voxel_size=dims
+                )
+                self.register_buffer(f'betas_{size_name}', betas, persistent=False)
+                self.beta_schedules[size_name] = betas
+    
+    def _adaptive_cosine_beta_schedule(
+        self, 
+        timesteps: int, 
+        voxel_size: tuple,
+        s_base: float = 0.008
+    ) -> torch.Tensor:
+        """
+        ADAPTIVE cosine schedule that adjusts based on voxel resolution.
+        Larger structures get MORE GRADUAL noise schedules.
+        
+        Args:
+            timesteps: Number of diffusion steps
+            voxel_size: (D, H, W) dimensions
+            s_base: Base smoothness parameter
+            
+        Returns:
+            betas: Noise schedule tensor
+        """
+        max_dim = max(voxel_size)
+        
+        # Adjust smoothness and max noise based on resolution
+        if max_dim <= 16:
+            s = s_base  # 0.008
+            max_noise = 0.95  # Aggressive for small structures
+        elif max_dim <= 32:
+            s = s_base * 1.5  # 0.012 - more gradual
+            max_noise = 0.85  # Less aggressive
+        else:  # 64+
+            s = s_base * 2.5  # 0.020 - very gradual
+            max_noise = 0.75  # Conservative
+        
+        steps = timesteps + 1
+        x = torch.linspace(0, timesteps, steps)
+        alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
+        alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+        betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+        
+        # Clip with adaptive max noise
+        return torch.clip(betas, 0.0001, max_noise)
     
     def _cosine_beta_schedule(self, timesteps: int, s: float = 0.008) -> torch.Tensor:
         """
@@ -351,21 +492,35 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
     def q_sample(
         self,
         x_start: torch.Tensor,
-        t: torch.Tensor
+        t: torch.Tensor,
+        size: str = None
     ) -> torch.Tensor:
         """
         Forward diffusion: q(x_t | x_0)
         Gradually transition to uniform distribution
+        NOW WITH ADAPTIVE SCHEDULING based on size
         
         Args:
             x_start: One-hot encoded voxels (B, C, D, H, W)
             t: Timesteps (B,)
+            size: Size category (for adaptive schedule)
         
         Returns:
             Noised one-hot (B, C, D, H, W)
         """
-        # Get transition probability for timestep t
-        alpha_cumprod_t = self.alphas_cumprod[t]
+        # Ensure beta schedules exist (for old checkpoints)
+        self._ensure_beta_schedules()
+        
+        # Use adaptive schedule if size is provided
+        if size is not None and size in self.beta_schedules:
+            # Compute alphas_cumprod for this size
+            betas_size = self.beta_schedules[size]
+            alphas_size = 1.0 - betas_size
+            alphas_cumprod_size = torch.cumprod(alphas_size, dim=0)
+            alpha_cumprod_t = alphas_cumprod_size[t]
+        else:
+            # Fallback to default schedule
+            alpha_cumprod_t = self.alphas_cumprod[t]
         
         # Reshape for broadcasting
         while len(alpha_cumprod_t.shape) < len(x_start.shape):
@@ -408,8 +563,8 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         # Sample random timesteps
         t = torch.randint(0, self.num_timesteps, (batch_size,), device=device, dtype=torch.long)
         
-        # Forward diffusion
-        x_t = self.q_sample(x, t)
+        # Forward diffusion WITH SIZE-SPECIFIC SCHEDULE
+        x_t = self.q_sample(x, t, size=size)
         
         # Project embeddings
         time_embed = self.time_embed(t.float())
@@ -459,8 +614,18 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         x_0_pred = F.softmax(predicted_logits, dim=1)
 
         if t[0] > 0:
-            # Previous cumulative alpha (probability of staying in same state up to t-1)
-            alpha_cumprod_t_prev = self.alphas_cumprod[t - 1]
+            # Ensure beta schedules exist (for old checkpoints)
+            self._ensure_beta_schedules()
+            
+            # Use ADAPTIVE schedule if available
+            if size in self.beta_schedules:
+                betas_size = self.beta_schedules[size]
+                alphas_size = 1.0 - betas_size
+                alphas_cumprod_size = torch.cumprod(alphas_size, dim=0)
+                alpha_cumprod_t_prev = alphas_cumprod_size[t - 1]
+            else:
+                alpha_cumprod_t_prev = self.alphas_cumprod[t - 1]
+            
             while len(alpha_cumprod_t_prev.shape) < len(x.shape):
                 alpha_cumprod_t_prev = alpha_cumprod_t_prev.unsqueeze(-1)
 
@@ -485,26 +650,57 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         size: str,
         num_samples: int = 1,
         sampling_steps: Optional[int] = None,
-        guidance_scale: float = 1.0
+        guidance_scale: float = 1.0,
+        temperature: float = 1.0,
+        top_k: int = 0,
+        top_p: float = 1.0
     ) -> torch.Tensor:
         """
         Generate samples using reverse diffusion with Classifier-Free Guidance
+        NOW WITH IMPROVED SAMPLING (top-k, top-p, temperature)
         
         Args:
             text_embed: Text embeddings (B, text_embed_dim)
             size: Size category
             num_samples: Number of samples
             sampling_steps: Number of steps (None = all timesteps)
-            guidance_scale: CFG strength (1.0 = no guidance, 3.0-7.0 typical for strong prompt following)
+            guidance_scale: CFG strength (1.0 = no guidance, 3.0-7.0 typical)
+            temperature: Sampling temperature (0.7-1.0 recommended)
+            top_k: Top-k filtering (0 = disabled, 10-50 recommended)
+            top_p: Nucleus sampling (1.0 = disabled, 0.8-0.95 recommended)
         
         Returns:
             Generated one-hot voxels (B, C, D, H, W)
         """
         device = text_embed.device
         
+        # Ensure beta schedules exist (for old checkpoints)
+        self._ensure_beta_schedules()
+        
         # Get dimensions
         dims = self.config['model']['sizes'][size]['dims']
         D, H, W = dims
+        max_dim = max(dims)
+        
+        # ADAPTIVE sampling parameters based on resolution
+        # If top_k/top_p are at default (0/1.0), enable auto-adaptive
+        if top_k <= 0:  # Auto-adjust if 0 or not specified
+            if max_dim <= 16:
+                top_k = 15  # More filtering for small structures
+            elif max_dim <= 32:
+                top_k = 12  # Strong filtering for medium
+            else:
+                top_k = 10  # Very strong filtering for large
+        
+        if top_p >= 1.0:  # Auto-adjust if 1.0 or higher
+            if max_dim <= 16:
+                top_p = 0.9
+            elif max_dim <= 32:
+                top_p = 0.85  # More conservative
+            else:
+                top_p = 0.8  # Very conservative for coherence
+        
+        print(f"Adaptive sampling for {size}: temp={temperature:.2f}, top_k={top_k}, top_p={top_p}")
         
         # Project text embeddings once
         text_proj = self.text_proj(text_embed)
@@ -521,9 +717,19 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
                 self.num_timesteps - 1, 0, sampling_steps, dtype=torch.long, device=device
             ).tolist()
         
-        # Iterative denoising with CFG
+        # Iterative denoising with CFG and IMPROVED SAMPLING
         for t in timesteps:
             t_batch = torch.full((num_samples,), t, device=device, dtype=torch.long)
-            x = self.p_sample(x, t_batch, text_embed, text_proj, size, guidance_scale=guidance_scale)
+            probs = self.p_sample(x, t_batch, text_embed, text_proj, size, guidance_scale=guidance_scale)
+            
+            # Apply improved sampling with top-k/top-p
+            B, C, D, H, W = probs.shape
+            probs_flat = probs.permute(0, 2, 3, 4, 1).reshape(-1, C)  # (B*D*H*W, C)
+            
+            sampled_indices = improved_sampling(probs_flat, temperature, top_k, top_p)
+            sampled_indices = sampled_indices.reshape(B, D, H, W)
+            
+            # Convert back to one-hot distribution
+            x = F.one_hot(sampled_indices.long(), num_classes=self.num_classes).permute(0, 4, 1, 2, 3).float()
         
         return x
