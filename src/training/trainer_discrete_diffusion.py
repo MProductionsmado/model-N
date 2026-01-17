@@ -30,6 +30,13 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         logger.info("Initialized Discrete Diffusion Model")
         logger.info(f"Number of block categories: {self.model.num_classes}")
         logger.info(f"Timesteps: {self.model.num_timesteps}")
+
+        # WEIGHTED LOSS IMPLEMENTATION
+        # Air (index 0) is ~95% of data. If we don't weight it down, model predicts only air.
+        # We assign a small weight to air (0.1) and 1.0 to everything else.
+        loss_weights = torch.ones(self.model.num_classes)
+        loss_weights[0] = 0.05  # Drastically reduce importance of air (1/20)
+        self.register_buffer('loss_weights', loss_weights)
     
     def forward(self, batch):
         """Forward pass"""
@@ -59,7 +66,13 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         target_classes = torch.argmax(target_onehot, dim=1)  # (B, D, H, W)
         
         # Cross-entropy expects (B, C, D, H, W) logits and (B, D, H, W) targets
-        loss = F.cross_entropy(predicted_logits, target_classes, reduction='mean')
+        # Using WEIGHTED loss to handle class imbalance (Air vs Blocks)
+        loss = F.cross_entropy(
+            predicted_logits, 
+            target_classes, 
+            weight=self.loss_weights,
+            reduction='mean'
+        )
         
         # Log
         self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=True)
@@ -71,9 +84,14 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         """Validation step"""
         predicted_logits, target_onehot = self(batch)
         
-        # Cross-Entropy Loss
+        # Cross-Entropy Loss with weights
         target_classes = torch.argmax(target_onehot, dim=1)
-        loss = F.cross_entropy(predicted_logits, target_classes, reduction='mean')
+        loss = F.cross_entropy(
+            predicted_logits, 
+            target_classes, 
+            weight=self.loss_weights,
+            reduction='mean'
+        )
         
         # Additional metrics
         predicted_classes = torch.argmax(predicted_logits, dim=1)
@@ -124,7 +142,7 @@ def create_trainer(config: Dict, logger_name: str = "minecraft_discrete_diffusio
         mode='min',
         save_top_k=1,
         save_last=True,
-        every_n_epochs=config['training'].get('save_every_n_epochs', 50),
+        every_n_epochs=config['training'].get('save_every_n_epochs', 10),
         verbose=True
     )
     callbacks.append(checkpoint_callback)

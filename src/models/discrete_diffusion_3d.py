@@ -268,7 +268,12 @@ class UNet3D(nn.Module):
             
             # Upsample first (except first decoder level)
             if level < self.num_levels - 1:
-                self.upsample_ops.append(nn.ConvTranspose3d(ch, ch, kernel_size=4, stride=2, padding=1))
+                # self.upsample_ops.append(nn.ConvTranspose3d(ch, ch, kernel_size=4, stride=2, padding=1))
+                # IMPROVEMENT: Use Nearest Upsample + Conv to avoid checkerboard artifacts in 3D
+                self.upsample_ops.append(nn.Sequential(
+                    nn.Upsample(scale_factor=2, mode='nearest'),
+                    nn.Conv3d(ch, ch, kernel_size=3, padding=1)
+                ))
             else:
                 self.upsample_ops.append(nn.Identity())
             
@@ -635,8 +640,25 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
             prior_prev = x_0_pred * stay_prob_prev + uniform_prob_prev
 
             # Incorporate current noisy state x (acts like likelihood term)
+            # p(x_t | x_{t-1})
+            # Retrieve beta_t
+            if size in self.beta_schedules:
+                 betas_t = self.beta_schedules[size][t].view(-1, 1, 1, 1, 1) # B, 1, 1, 1, 1
+            else:
+                 betas_t = self.betas[t].view(-1, 1, 1, 1, 1)
+
+            # Likelihood p(x_t | x_{t-1})
+            # This is a vector over x_{t-1} states
+            uniform_jump = betas_t / self.num_classes
+            stay_p = 1.0 - betas_t
+            
+            # If x_{t-1} is same as observed x_t, prob is high.
+            # likelihood[c] = P(x_t | x_{t-1}=c)
+            # = (1-beta)*I(x_t==c) + beta/K
+            likelihood = x * stay_p + uniform_jump
+
             # Element-wise product then renormalize
-            posterior_unnorm = prior_prev * (x + 1e-8)
+            posterior_unnorm = prior_prev * likelihood
             posterior = posterior_unnorm / (posterior_unnorm.sum(dim=1, keepdim=True) + 1e-8)
             return posterior
         else:

@@ -31,7 +31,7 @@ model:
     
   # 3D UNet for Diffusion
   encoder:
-    channels: [64, 128, 256, 512]  # Reduced from [128, 256, 512, 1024] to fit in 24GB VRAM
+    channels: [128, 256, 512, 1024]  # FULL SIZE: L40S has 48GB VRAM
     kernel_size: 4
     stride: 2
     padding: 1
@@ -44,17 +44,17 @@ model:
     beta_end: 0.02  # For linear schedule
     time_embed_dim: 256  # Time embedding dimension
     num_res_blocks: 3  # INCREASED: More residual blocks for better long-range dependencies (was 2)
-    attention_levels: [2, 3]  # FALLBACK: Level 1 attention uses too much VRAM (was [1,2,3])
-    dropout: 0.15  # INCREASED: More dropout for better generalization (was 0.1)
+    attention_levels: [1, 2, 3]  # FULL ATTENTION: L40S has enough VRAM for all levels
+    dropout: 0.1  # Standard dropout
     sampling_steps: 50  # DDIM sampling steps (50 is fast, 1000 is slow but better)
 
 # Training Settings
 training:
-  batch_size: 8  # REDUCED: Attention at level 1 needs much more VRAM (was 8)
-  num_epochs: 400  # INCREASED: Even more epochs for fine details
-  learning_rate: 0.00002  # FURTHER REDUCED: Much slower learning for structural consistency (was 0.00005)
+  batch_size: 32  # L40S with 48GB VRAM can handle large batches
+  num_epochs: 200  # Fewer epochs needed with larger batches
+  learning_rate: 0.0001  # Higher LR for larger batch (linear scaling)
   weight_decay: 0.00001
-  num_workers: 64
+  num_workers: 16  # 32 vCPUs available, use half for data loading
   
   # Optimizer
   optimizer: "adam"
@@ -62,7 +62,7 @@ training:
   warmup_epochs: 10  # INCREASED: Gradual warmup for stable slow learning
   
   # Checkpointing
-  save_every_n_epochs: 50
+  save_every_n_epochs: 10
   checkpoint_dir: "models"
   
   # Early stopping
@@ -84,8 +84,8 @@ generation:
 # Hardware
 hardware:
   device: "cuda"  # cuda or cpu
-  num_workers: 8  # Data loading workers (0 for main process only)
-  precision: 16  # 16 for mixed precision, 32 for full precision
+  num_workers: 16  # Synced with training settings
+  precision: "bf16-mixed"  # bfloat16 for L40S (better precision than fp16)
   num_gpus: 1  # 1 for single GPU, -1 for ALL GPUs, [0,1,2] for specific GPUs
   
 # Block vocabulary (most common Minecraft blocks in nature assets)
@@ -93,4 +93,22 @@ hardware:
 blocks:
   air: 0
   oak_leaves: 1  # Count: 513,807
-  oak_wood: 2
+  birch_leaves: 2  # Count: 122,651
+  jungle_leaves: 3  # Count: 114,375
+  spruce_leaves: 4  # Count: 103,554
+  oak_wood: 5  # Count: 86,032
+  snow: 6  # Count: 60,163
+  tall_grass: 7  # Count: 58,464
+  birch_wood: 8  # Count: 51,290
+  light_gray_concrete: 9  # Count: 40,949
+  spruce_wood: 10  # Count: 39,180
+  yellow_stained_glass_pane: 11  # Count: 38,470
+  sunflower: 12  # Count: 36,600
+  dark_oak_leaves: 13  # Count: 31,928
+  andesite: 14  # Count: 30,111
+  vine: 15  # Count: 24,225
+  yellow_wool: 16  # Count: 23,335
+  spruce_fence: 17  # Count: 21,864
+  yellow_glazed_terracotta: 18  # Count: 20,239
+  green_stained_glass_pane: 19  # Count: 19,967
+  yellow_concrete: 20  # Count: 19,942
