@@ -75,8 +75,9 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         )
         
         # Log
-        self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log('train/loss_epoch', loss, on_step=False, on_epoch=True, prog_bar=True)
+        batch_size = predicted_logits.shape[0]
+        self.log('train/loss_step', loss, on_step=True, on_epoch=False, prog_bar=True, batch_size=batch_size)
+        self.log('train/loss_epoch', loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
         
         return loss
     
@@ -98,8 +99,9 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         accuracy = (predicted_classes == target_classes).float().mean()
         
         # Log
-        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val/accuracy', accuracy, on_step=False, on_epoch=True, prog_bar=True)
+        batch_size = predicted_logits.shape[0]
+        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
+        self.log('val/accuracy', accuracy, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
         
         return loss
     
