@@ -34,10 +34,10 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         logger.info(f"Timesteps: {self.model.num_timesteps}")
 
         # WEIGHTED LOSS IMPLEMENTATION
-        # Air (index 0) is ~95% of data. If we don't weight it down, model predicts only air.
-        # We assign a small weight to air (0.1) and 1.0 to everything else.
+        # Air (index 0) is ~95% of data.
+        # Setting weight manually to 1.0 (equal importance) to force model to learn emptiness.
         loss_weights = torch.ones(self.model.num_classes)
-        loss_weights[0] = 0.20  # Increased from 0.05 to prevent "solid noise" artifacts
+        loss_weights[0] = 1.0  # Was 0.2 - Set to 1.0 to clear up "solid noise" artifacts
         self.register_buffer('loss_weights', loss_weights)
     
     def forward(self, batch):
