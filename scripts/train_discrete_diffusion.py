@@ -158,7 +158,8 @@ def main():
         filename='{epoch}-{val_loss:.2f}',
         monitor='val/loss',
         mode='min',
-        save_top_k=3
+        save_top_k=1,
+        every_n_epochs=10  # Only save every 10 epochs to reduce file count
     )
     
     lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='step')
