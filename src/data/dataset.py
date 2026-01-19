@@ -113,10 +113,11 @@ class MinecraftSchematicDataset(Dataset):
         voxels = np.load(voxel_file)
         
         # Convert to tensor - copy to ensure we have our own storage
-        voxels = torch.from_numpy(voxels.copy()).long()
-        
-        # Convert to tensor
-        voxels = torch.from_numpy(voxels.copy()).long()
+        # Check if voxels is already a Tensor (can happen with caching) or numpy array
+        if isinstance(voxels, torch.Tensor):
+            voxels = voxels.clone().long()
+        else:
+            voxels = torch.from_numpy(voxels.copy()).long()
         
         # Apply augmentation if this is training data
         if self.transform is not None:
