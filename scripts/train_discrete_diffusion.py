@@ -155,8 +155,8 @@ def main():
     
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
         dirpath=f'models/checkpoints/{args.size}',
-        filename='{epoch}-{val_loss_epoch:.2f}',
-        monitor='val/loss_epoch',
+        filename='{epoch}-{val_loss:.2f}',
+        monitor='val/loss',
         mode='min',
         save_top_k=3
     )
@@ -167,6 +167,8 @@ def main():
     acc_grad = config['training'].get('accumulate_grad_batches', 1)
     num_epochs = config['training']['num_epochs']
         
+    log_every = config['training'].get('log_every_n_steps', 10)
+    
     trainer = pl.Trainer(
         max_epochs=num_epochs,
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
@@ -175,7 +177,8 @@ def main():
         callbacks=[checkpoint_callback, lr_monitor],
         logger=pl.loggers.TensorBoardLogger("logs", name=f"discrete_diffusion_{args.size}"),
         gradient_clip_val=1.0,
-        accumulate_grad_batches=acc_grad
+        accumulate_grad_batches=acc_grad,
+        log_every_n_steps=log_every
     )
     
     # Train
