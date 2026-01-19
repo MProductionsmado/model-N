@@ -389,7 +389,7 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         self.unets = nn.ModuleDict()
         for size_name, size_config in config['model']['sizes'].items():
             self.unets[size_name] = UNet3D(
-                in_channels=self.num_classes,
+                in_channels=self.num_classes + 3,  # Added 3 channels for CoordConv (x,y,z)
                 out_channels=self.num_classes,  # Predict logits for each class
                 model_channels=config['model']['encoder']['channels'][0],
                 channel_multipliers=tuple(
@@ -480,7 +480,9 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
         
         # Clip with adaptive max noise
-        return torch.clip(betas, 0.0001, max_noise)
+        # REMOVED max_noise clipping to ensure full noise at t=T
+        # This prevents distribution mismatch between training end and inference start
+        return torch.clip(betas, 0.0001, 0.9999)
     
     def _cosine_beta_schedule(self, timesteps: int, s: float = 0.008) -> torch.Tensor:
         """
@@ -543,6 +545,36 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         
         return noised
     
+    def _add_coordinate_channels(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Add normalized coordinate channels (x, y, z) to the input.
+        CoordConv implementation for 3D.
+        
+        Args:
+            x: Input tensor (B, C, D, H, W)
+            
+        Returns:
+            Tensor with added coordinates (B, C+3, D, H, W)
+        """
+        B, _, D, H, W = x.shape
+        device = x.device
+        
+        # Create normalized coordinates (-1 to 1)
+        # Z-axis (Depth)
+        z_coords = torch.linspace(-1, 1, steps=D, device=device).view(1, 1, D, 1, 1)
+        z_coords = z_coords.expand(B, 1, D, H, W)
+        
+        # Y-axis (Height)
+        y_coords = torch.linspace(-1, 1, steps=H, device=device).view(1, 1, 1, H, 1)
+        y_coords = y_coords.expand(B, 1, D, H, W)
+        
+        # X-axis (Width)
+        x_coords = torch.linspace(-1, 1, steps=W, device=device).view(1, 1, 1, 1, W)
+        x_coords = x_coords.expand(B, 1, D, H, W)
+        
+        # Concatenate
+        return torch.cat([x, z_coords, y_coords, x_coords], dim=1)
+
     def forward(
         self,
         x: torch.Tensor,
@@ -575,11 +607,15 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         time_embed = self.time_embed(t.float())
         text_proj = self.text_proj(text_embed)
         
+        # Add coordinate channels (CoordConv)
+        # This helps the model understand absolute position (floor vs roof)
+        x_t_aug = self._add_coordinate_channels(x_t)
+        
         # Predict original one-hot from noised version
-        predicted_logits = self.unets[size](x_t, time_embed, text_proj)
+        predicted_logits = self.unets[size](x_t_aug, time_embed, text_proj)
         # Return predicted logits and original clean target
         return predicted_logits, x, t
-    
+
     @torch.no_grad()
     def p_sample(
         self,
@@ -600,20 +636,23 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         # Predict logits for x_0 (clean data estimate)
         time_embed = self.time_embed(t.float())
         
+        # Add coordinate channels (CoordConv)
+        x_aug = self._add_coordinate_channels(x)
+        
         # Classifier-Free Guidance: conditional + unconditional prediction
         if guidance_scale != 1.0:
             # Conditional prediction (with text)
-            predicted_logits_cond = self.unets[size](x, time_embed, text_proj)
+            predicted_logits_cond = self.unets[size](x_aug, time_embed, text_proj)
             
             # Unconditional prediction (without text - zero embedding)
             text_proj_uncond = torch.zeros_like(text_proj)
-            predicted_logits_uncond = self.unets[size](x, time_embed, text_proj_uncond)
+            predicted_logits_uncond = self.unets[size](x_aug, time_embed, text_proj_uncond)
             
             # CFG: interpolate logits before softmax
             predicted_logits = predicted_logits_uncond + guidance_scale * (predicted_logits_cond - predicted_logits_uncond)
         else:
             # No guidance: just conditional
-            predicted_logits = self.unets[size](x, time_embed, text_proj)
+            predicted_logits = self.unets[size](x_aug, time_embed, text_proj)
 
         # Estimate x_0 distribution
         x_0_pred = F.softmax(predicted_logits, dim=1)

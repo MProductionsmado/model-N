@@ -115,18 +115,13 @@ class MinecraftSchematicDataset(Dataset):
         # Convert to tensor - copy to ensure we have our own storage
         voxels = torch.from_numpy(voxels.copy()).long()
         
-        # One-hot encode
-        voxels_onehot = torch.nn.functional.one_hot(
-            voxels, 
-            num_classes=self.num_classes
-        )
-        # Transpose to (C, D, H, W) and make contiguous
-        voxels_onehot = voxels_onehot.permute(3, 0, 1, 2).float().contiguous()
+        # Convert to tensor
+        voxels = torch.from_numpy(voxels.copy()).long()
         
         # Apply augmentation if this is training data
         if self.transform is not None:
             # Get spatial dimensions (D, H, W)
-            _, D, H, W = voxels_onehot.shape
+            D, H, W = voxels.shape
             
             # Only apply rotation if structure is cubic in the horizontal plane (D == W)
             # This prevents dimension mismatches for non-square structures
@@ -134,16 +129,16 @@ class MinecraftSchematicDataset(Dataset):
                 # Random 90-degree rotation around Y axis (vertical)
                 if torch.rand(1) > 0.5:
                     k = torch.randint(1, 4, (1,)).item()
-                    # Rotate in the D-W plane (dims 1 and 3, skipping H)
-                    voxels_onehot = torch.rot90(voxels_onehot, k=k, dims=(1, 3))
+                    # Rotate in the D-W plane (dims 0 and 2 for indices)
+                    voxels = torch.rot90(voxels, k=k, dims=(0, 2))
             
-            # Random flip along D axis (depth)
+            # Random flip along D axis (depth, dim 0)
             if torch.rand(1) > 0.5:
-                voxels_onehot = torch.flip(voxels_onehot, dims=[1])
+                voxels = torch.flip(voxels, dims=[0])
             
-            # Random flip along W axis (width) 
+            # Random flip along W axis (width, dim 2) 
             if torch.rand(1) > 0.5:
-                voxels_onehot = torch.flip(voxels_onehot, dims=[3])
+                voxels = torch.flip(voxels, dims=[2])
         
         # Get text embedding - create completely new tensor
         text_embedding = torch.tensor(item['text_embedding'], dtype=torch.float32)
@@ -154,7 +149,7 @@ class MinecraftSchematicDataset(Dataset):
         
         # Clone all tensors to ensure they're in contiguous, resizable memory
         return {
-            'voxels': voxels_onehot.clone(),
+            'voxels': voxels.clone(), # Returns indices (D, H, W) - OneHot happens in Trainer on GPU
             'text_embedding': text_embedding.clone(),
             'size': size_category.clone(),
             'size_name': item['size'],

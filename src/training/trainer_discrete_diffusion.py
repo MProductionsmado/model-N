@@ -41,9 +41,13 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
     def forward(self, batch):
         """Forward pass"""
         # Extract batch data
-        voxels_onehot = batch['voxels']  # (B, C, D, H, W) - already one-hot
+        voxels = batch['voxels']  # (B, D, H, W) - indices
         text_embedding = batch['text_embedding']  # (B, 384)
         size_name = batch['size_name'][0]  # String (same for whole batch)
+        
+        # One-hot encode ON GPU (saves RAM in dataloader)
+        voxels_onehot = F.one_hot(voxels, num_classes=self.model.num_classes)
+        voxels_onehot = voxels_onehot.permute(0, 4, 1, 2, 3).float()  # (B, C, D, H, W)
         
         # Forward through model
         predicted_logits, target_onehot, t = self.model(
