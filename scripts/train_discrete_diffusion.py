@@ -159,13 +159,18 @@ def main():
     # Create trainer with size-specific settings
     logger.info("Creating trainer...")
     
+    # Ensure checkpoint directory exists
+    ckpt_dir = Path(config['training']['checkpoint_dir']) / args.size
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
-        dirpath=f'models/checkpoints/{args.size}',
+        dirpath=ckpt_dir,
         filename='{epoch}-{val_loss:.2f}',
         monitor='val/loss',
         mode='min',
-        save_top_k=1,
-        every_n_epochs=10  # Only save every 10 epochs to reduce file count
+        save_top_k=3,
+        save_last=True,     # Always save the latest model as 'last.ckpt'
+        every_n_epochs=10   # Check top-k every 10 epochs
     )
     
     lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='step')

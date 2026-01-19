@@ -81,10 +81,22 @@ def main():
     # Load model
     logger.info(f"Loading model from {args.checkpoint}")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Load checkpoint to extract the config it was trained with
+    checkpoint = torch.load(args.checkpoint, map_location=device)
+    if 'hyper_parameters' in checkpoint and 'config' in checkpoint['hyper_parameters']:
+        train_config = checkpoint['hyper_parameters']['config']
+        logger.info("Using config from checkpoint (ensures architecture match)")
+    else:
+        train_config = config
+        logger.warning("No config in checkpoint, using current config file")
+    
     model = DiscreteDiffusionLightningModule.load_from_checkpoint(
         args.checkpoint,
-        config=config,
-        map_location=device
+        config=train_config,
+        target_size=size,
+        map_location=device,
+        strict=False  # Allow loading even if some keys mismatch
     )
     model.eval()
     model.to(device)

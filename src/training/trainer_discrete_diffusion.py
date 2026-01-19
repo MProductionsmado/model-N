@@ -37,7 +37,7 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         # Air (index 0) is ~95% of data. If we don't weight it down, model predicts only air.
         # We assign a small weight to air (0.1) and 1.0 to everything else.
         loss_weights = torch.ones(self.model.num_classes)
-        loss_weights[0] = 0.05  # Drastically reduce importance of air (1/20)
+        loss_weights[0] = 0.20  # Increased from 0.05 to prevent "solid noise" artifacts
         self.register_buffer('loss_weights', loss_weights)
     
     def forward(self, batch):
