@@ -359,13 +359,21 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
     """
     Discrete Diffusion Model using Multinomial Transitions
     Better for categorical data like Minecraft blocks
+    Single-Size Version: Trains a dedicated model for one specific size category.
     """
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, target_size: str):
         super().__init__()
         self.config = config
+        self.target_size = target_size
         self.num_classes = len(config['blocks'])
         self.num_timesteps = config['model']['diffusion']['num_timesteps']
+        
+        # Validate target size
+        if target_size not in config['model']['sizes']:
+            raise ValueError(f"Target size '{target_size}' not found in config. Available: {list(config['model']['sizes'].keys())}")
+        
+        size_config = config['model']['sizes'][target_size]
         
         # Time embeddings
         time_embed_dim = 256
@@ -385,62 +393,36 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         
         cond_dim = time_embed_dim + text_proj_dim
         
-        # Create UNets for each size
-        self.unets = nn.ModuleDict()
-        for size_name, size_config in config['model']['sizes'].items():
-            self.unets[size_name] = UNet3D(
-                in_channels=self.num_classes + 3,  # Added 3 channels for CoordConv (x,y,z)
-                out_channels=self.num_classes,  # Predict logits for each class
-                model_channels=config['model']['encoder']['channels'][0],
-                channel_multipliers=tuple(
-                    c // config['model']['encoder']['channels'][0] 
-                    for c in config['model']['encoder']['channels']
-                ),
-                num_res_blocks=config['model']['diffusion']['num_res_blocks'],
-                cond_dim=cond_dim,
-                attention_levels=tuple(config['model']['diffusion']['attention_levels']),
-                dropout=config['model']['diffusion']['dropout']
-            )
+        # Create SINGLE UNet for the target size
+        print(f"Initializing 3D U-Net for size: {target_size} {size_config['dims']}")
+        self.unet = UNet3D(
+            in_channels=self.num_classes + 3,  # Added 3 channels for CoordConv (x,y,z)
+            out_channels=self.num_classes,  # Predict logits for each class
+            model_channels=config['model']['encoder']['channels'][0],
+            channel_multipliers=tuple(
+                c // config['model']['encoder']['channels'][0] 
+                for c in config['model']['encoder']['channels']
+            ),
+            num_res_blocks=config['model']['diffusion']['num_res_blocks'],
+            cond_dim=cond_dim,
+            attention_levels=tuple(config['model']['diffusion']['attention_levels']),
+            dropout=config['model']['diffusion']['dropout']
+        )
         
         # Transition matrix schedule (probability of staying in same state)
-        # At t=0: almost always stay, at t=T: uniform distribution
-        # ADAPTIVE: Different schedules for different resolutions
-        self.beta_schedules = {}
-        for size_name, size_config in config['model']['sizes'].items():
-            dims = size_config['dims']
-            betas = self._adaptive_cosine_beta_schedule(
-                self.num_timesteps, 
-                voxel_size=dims
-            )
-            # Use register_buffer with persistent=False for backward compatibility
-            # Old checkpoints won't have these, but we can compute them on-the-fly
-            self.register_buffer(f'betas_{size_name}', betas, persistent=False)
-            self.beta_schedules[size_name] = betas
-        
-        # Also keep default for backward compatibility
-        betas = self._cosine_beta_schedule(self.num_timesteps)
+        # ADAPTIVE: Schedule based on resolution of target size
+        dims = size_config['dims']
+        betas = self._adaptive_cosine_beta_schedule(
+            self.num_timesteps, 
+            voxel_size=dims
+        )
         self.register_buffer('betas', betas)
         
-        # Cumulative product of (1 - beta) - will be computed per size
+        # Cumulative product of (1 - beta)
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         self.register_buffer('alphas', alphas)
         self.register_buffer('alphas_cumprod', alphas_cumprod)
-    
-    def _ensure_beta_schedules(self):
-        """
-        Ensure beta schedules exist for all sizes.
-        Called during inference to handle old checkpoints.
-        """
-        for size_name, size_config in self.config['model']['sizes'].items():
-            if not hasattr(self, f'betas_{size_name}'):
-                dims = size_config['dims']
-                betas = self._adaptive_cosine_beta_schedule(
-                    self.num_timesteps, 
-                    voxel_size=dims
-                )
-                self.register_buffer(f'betas_{size_name}', betas, persistent=False)
-                self.beta_schedules[size_name] = betas
     
     def _adaptive_cosine_beta_schedule(
         self, 
@@ -504,30 +486,8 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
     ) -> torch.Tensor:
         """
         Forward diffusion: q(x_t | x_0)
-        Gradually transition to uniform distribution
-        NOW WITH ADAPTIVE SCHEDULING based on size
-        
-        Args:
-            x_start: One-hot encoded voxels (B, C, D, H, W)
-            t: Timesteps (B,)
-            size: Size category (for adaptive schedule)
-        
-        Returns:
-            Noised one-hot (B, C, D, H, W)
         """
-        # Ensure beta schedules exist (for old checkpoints)
-        self._ensure_beta_schedules()
-        
-        # Use adaptive schedule if size is provided
-        if size is not None and size in self.beta_schedules:
-            # Compute alphas_cumprod for this size
-            betas_size = self.beta_schedules[size].to(t.device)  # MOVE TO SAME DEVICE
-            alphas_size = 1.0 - betas_size
-            alphas_cumprod_size = torch.cumprod(alphas_size, dim=0)
-            alpha_cumprod_t = alphas_cumprod_size[t]
-        else:
-            # Fallback to default schedule
-            alpha_cumprod_t = self.alphas_cumprod[t]
+        alpha_cumprod_t = self.alphas_cumprod[t]
         
         # Reshape for broadcasting
         while len(alpha_cumprod_t.shape) < len(x_start.shape):
@@ -612,7 +572,7 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         x_t_aug = self._add_coordinate_channels(x_t)
         
         # Predict original one-hot from noised version
-        predicted_logits = self.unets[size](x_t_aug, time_embed, text_proj)
+        predicted_logits = self.unet(x_t_aug, time_embed, text_proj)
         # Return predicted logits and original clean target
         return predicted_logits, x, t
 
@@ -623,15 +583,11 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         t: torch.Tensor,
         text_embed: torch.Tensor,
         text_proj: torch.Tensor,
-        size: str,
+        size: str = None,
         guidance_scale: float = 1.0
     ) -> torch.Tensor:
         """
         Reverse diffusion: p(x_{t-1} | x_t)
-        Single denoising step for discrete data with Classifier-Free Guidance
-        
-        Args:
-            guidance_scale: CFG strength (1.0 = no guidance, >1.0 = stronger prompt following)
         """
         # Predict logits for x_0 (clean data estimate)
         time_embed = self.time_embed(t.float())
@@ -642,33 +598,23 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         # Classifier-Free Guidance: conditional + unconditional prediction
         if guidance_scale != 1.0:
             # Conditional prediction (with text)
-            predicted_logits_cond = self.unets[size](x_aug, time_embed, text_proj)
+            predicted_logits_cond = self.unet(x_aug, time_embed, text_proj)
             
             # Unconditional prediction (without text - zero embedding)
             text_proj_uncond = torch.zeros_like(text_proj)
-            predicted_logits_uncond = self.unets[size](x_aug, time_embed, text_proj_uncond)
+            predicted_logits_uncond = self.unet(x_aug, time_embed, text_proj_uncond)
             
             # CFG: interpolate logits before softmax
             predicted_logits = predicted_logits_uncond + guidance_scale * (predicted_logits_cond - predicted_logits_uncond)
         else:
             # No guidance: just conditional
-            predicted_logits = self.unets[size](x_aug, time_embed, text_proj)
+            predicted_logits = self.unet(x_aug, time_embed, text_proj)
 
         # Estimate x_0 distribution
         x_0_pred = F.softmax(predicted_logits, dim=1)
 
         if t[0] > 0:
-            # Ensure beta schedules exist (for old checkpoints)
-            self._ensure_beta_schedules()
-            
-            # Use ADAPTIVE schedule if available
-            if size in self.beta_schedules:
-                betas_size = self.beta_schedules[size].to(t.device)  # MOVE TO SAME DEVICE
-                alphas_size = 1.0 - betas_size
-                alphas_cumprod_size = torch.cumprod(alphas_size, dim=0)
-                alpha_cumprod_t_prev = alphas_cumprod_size[t - 1]
-            else:
-                alpha_cumprod_t_prev = self.alphas_cumprod[t - 1]
+            alpha_cumprod_t_prev = self.alphas_cumprod[t - 1]
             
             while len(alpha_cumprod_t_prev.shape) < len(x.shape):
                 alpha_cumprod_t_prev = alpha_cumprod_t_prev.unsqueeze(-1)
@@ -681,12 +627,10 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
             # Incorporate current noisy state x (acts like likelihood term)
             # p(x_t | x_{t-1})
             # Retrieve beta_t
-            if size in self.beta_schedules:
-                 betas_t = self.beta_schedules[size][t].view(-1, 1, 1, 1, 1) # B, 1, 1, 1, 1
-            else:
-                 betas_t = self.betas[t].view(-1, 1, 1, 1, 1)
+            betas_t = self.betas[t].view(-1, 1, 1, 1, 1)
 
             # Likelihood p(x_t | x_{t-1})
+
             # This is a vector over x_{t-1} states
             uniform_jump = betas_t / self.num_classes
             stay_p = 1.0 - betas_t
@@ -708,7 +652,7 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
     def generate(
         self,
         text_embed: torch.Tensor,
-        size: str,
+        size: str = None, # kept but ignored, uses self.target_size
         num_samples: int = 1,
         sampling_steps: Optional[int] = None,
         guidance_scale: float = 1.0,
@@ -718,25 +662,9 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
     ) -> torch.Tensor:
         """
         Generate samples using reverse diffusion with Classifier-Free Guidance
-        NOW WITH IMPROVED SAMPLING (top-k, top-p, temperature)
-        
-        Args:
-            text_embed: Text embeddings (B, text_embed_dim)
-            size: Size category
-            num_samples: Number of samples
-            sampling_steps: Number of steps (None = all timesteps)
-            guidance_scale: CFG strength (1.0 = no guidance, 3.0-7.0 typical)
-            temperature: Sampling temperature (0.7-1.0 recommended)
-            top_k: Top-k filtering (0 = disabled, 10-50 recommended)
-            top_p: Nucleus sampling (1.0 = disabled, 0.8-0.95 recommended)
-        
-        Returns:
-            Generated one-hot voxels (B, C, D, H, W)
         """
         device = text_embed.device
-        
-        # Ensure beta schedules exist (for old checkpoints)
-        self._ensure_beta_schedules()
+        size = self.target_size
         
         # Get dimensions
         dims = self.config['model']['sizes'][size]['dims']
@@ -744,22 +672,21 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         max_dim = max(dims)
         
         # ADAPTIVE sampling parameters based on resolution
-        # If top_k/top_p are at default (0/1.0), enable auto-adaptive
-        if top_k <= 0:  # Auto-adjust if 0 or not specified
+        if top_k <= 0:
             if max_dim <= 16:
-                top_k = 15  # More filtering for small structures
+                top_k = 15
             elif max_dim <= 32:
-                top_k = 12  # Strong filtering for medium
+                top_k = 12
             else:
-                top_k = 10  # Very strong filtering for large
+                top_k = 10
         
-        if top_p >= 1.0:  # Auto-adjust if 1.0 or higher
+        if top_p >= 1.0:
             if max_dim <= 16:
                 top_p = 0.9
             elif max_dim <= 32:
-                top_p = 0.85  # More conservative
+                top_p = 0.85
             else:
-                top_p = 0.8  # Very conservative for coherence
+                top_p = 0.8
         
         print(f"Adaptive sampling for {size}: temp={temperature:.2f}, top_k={top_k}, top_p={top_p}")
         

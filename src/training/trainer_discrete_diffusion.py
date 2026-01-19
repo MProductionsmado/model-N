@@ -19,15 +19,17 @@ logger = logging.getLogger(__name__)
 class DiscreteDiffusionLightningModule(pl.LightningModule):
     """PyTorch Lightning Module for Discrete Diffusion Training"""
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: Dict, target_size: str):
         super().__init__()
         self.config = config
+        self.target_size = target_size
         self.save_hyperparameters()
         
-        # Create model
-        self.model = DiscreteDiscreteDiffusionModel3D(config)
+        # Create model for specific size
+        self.model = DiscreteDiscreteDiffusionModel3D(config, target_size=target_size)
         
         logger.info("Initialized Discrete Diffusion Model")
+        logger.info(f"Target Size: {target_size}")
         logger.info(f"Number of block categories: {self.model.num_classes}")
         logger.info(f"Timesteps: {self.model.num_timesteps}")
 
@@ -43,7 +45,7 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         # Extract batch data
         voxels = batch['voxels']  # (B, D, H, W) - indices
         text_embedding = batch['text_embedding']  # (B, 384)
-        size_name = batch['size_name'][0]  # String (same for whole batch)
+        # size_name is in batch but we ignore it as we only train one size
         
         # One-hot encode ON GPU (saves RAM in dataloader)
         voxels_onehot = F.one_hot(voxels, num_classes=self.model.num_classes)
@@ -53,7 +55,7 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         predicted_logits, target_onehot, t = self.model(
             x=voxels_onehot,
             text_embed=text_embedding,
-            size=size_name
+            size=None # Ignored by new single-size model
         )
         
         return predicted_logits, target_onehot

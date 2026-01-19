@@ -1,96 +1,156 @@
   # Configuration for Minecraft 3D Asset Generator
+# =============================================
+# Structure: Global defaults + Size-specific overrides
+# Usage: python train.py --size normal (uses sizes.normal config)
 
-  # Data Settings
-  data:
-    input_dir: "out"
-    output_dir: "data"
-    processed_dir: "data/processed"
-    train_split: 0.8
-    val_split: 0.1
-    test_split: 0.1
-    random_seed: 42
+# =============================================================================
+# DATA SETTINGS (shared across all sizes)
+# =============================================================================
+data:
+  input_dir: "out"
+  output_dir: "data"
+  processed_dir: "data/processed"
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  random_seed: 42
 
-  # Model Architecture
-  model:
-    # Size configurations
-    sizes:
-      normal:
-        dims: [16, 16, 16]
-        latent_dim: 128
-      big:
-        dims: [16, 32, 16]
-        latent_dim: 192
-      huge:
-        dims: [24, 64, 24]
-        latent_dim: 256
-    
-    # Text encoder
-    text_encoder:
-      model_name: "all-MiniLM-L6-v2"  # Sentence-BERT model
-      embedding_dim: 384
-      
-    # 3D UNet for Diffusion
-    encoder:
-      channels: [64, 128, 256, 512]  # Reduced back to standard size to fix OOM
-      kernel_size: 4
-      stride: 2
-      padding: 1
-      
-    # Diffusion parameters (DDPM)
-    diffusion:
-      num_timesteps: 1000  # Number of diffusion steps
-      noise_schedule: "cosine"  # 'linear' or 'cosine' (cosine is better)
-      beta_start: 0.0001  # For linear schedule
-      beta_end: 0.02  # For linear schedule
-      time_embed_dim: 256  # Time embedding dimension
-      num_res_blocks: 3  # INCREASED: More residual blocks for better long-range dependencies (was 2)
-      attention_levels: [2, 3]  # Reduced for VRAM (level 1 uses too much memory)
-      dropout: 0.1  # Standard dropout
-      sampling_steps: 50  # DDIM sampling steps (50 is fast, 1000 is slow but better)
+# =============================================================================
+# GLOBAL MODEL DEFAULTS
+# These are used unless overridden in size-specific config
+# =============================================================================
+model:
+  # Text encoder (shared - same for all sizes)
+  text_encoder:
+    model_name: "all-MiniLM-L6-v2"
+    embedding_dim: 384
+  
+  # Default encoder settings (can be overridden per size)
+  encoder:
+    channels: [64, 128, 256, 512]
+    kernel_size: 4
+    stride: 2
+    padding: 1
+  
+  # Default diffusion settings (can be overridden per size)
+  diffusion:
+    num_timesteps: 1000
+    noise_schedule: "cosine"
+    beta_start: 0.0001
+    beta_end: 0.02
+    time_embed_dim: 256
+    num_res_blocks: 2
+    attention_levels: [2, 3]
+    dropout: 0.1
+    sampling_steps: 50
 
-  # Training Settings
-  training:
-    batch_size: 8  # Reduced to 8 to fix OOM error
-    num_epochs: 300  # More epochs needed with smaller model/batch
-    learning_rate: 0.00005  # Standard stable learning rate
-    weight_decay: 0.00001
-    num_workers: 16  # 32 vCPUs available, use half for data loading
+  # =========================================================================
+  # SIZE-SPECIFIC CONFIGURATIONS
+  # Optimized for RTX 4090 (24GB VRAM) + 41GB RAM + 8 vCPU
+  # =========================================================================
+  sizes:
+    # ----- NORMAL: Small structures (bushes, small rocks) -----
+    # DIMENSIONS: 16x16x16 (4,096 voxels)
+    # VRAM USE: Low (<6 GB)
+    normal:
+      dims: [16, 16, 16]
+      latent_dim: 128
+      encoder:
+        channels: [64, 128, 256, 512] # Standard channels ok for small size
+      diffusion:
+        num_res_blocks: 2
+        attention_levels: [1, 2, 3]   # Full attention for quality
+        sampling_steps: 50
+      training:
+        batch_size: 64                # High batch size for speed
+        learning_rate: 0.0001
+        accumulate_grad_batches: 1
+        num_epochs: 200
+
+    # ----- BIG: Standard trees, small houses -----
+    # DIMENSIONS: 16x32x16 (8,192 voxels)
+    # VRAM USE: Medium (~10-14 GB)
+    big:
+      dims: [16, 32, 16]
+      latent_dim: 192
+      encoder:
+        channels: [64, 128, 256, 512]
+      diffusion:
+        num_res_blocks: 3              # More depth for vertical structures
+        attention_levels: [2, 3]       # Attention only at lower resolutions
+        sampling_steps: 75
+      training:
+        batch_size: 24                 # Max out 24GB VRAM
+        learning_rate: 0.00008
+        accumulate_grad_batches: 2     # Effective batch = 48
+        num_epochs: 300
+
+    # ----- HUGE: Giant trees, complex builds -----
+    # DIMENSIONS: 24x64x24 (36,864 voxels)
+    # VRAM USE: High (~20-23 GB) - LIMIT!
+    huge:
+      dims: [24, 64, 24]
+      latent_dim: 256
+      encoder:
+        channels: [64, 128, 256, 384]  # Reduced last channel to save ~2GB VRAM
+      diffusion:
+        num_res_blocks: 3
+        attention_levels: [3]          # Attn ONLY at bottleneck (critical for VRAM)
+        sampling_steps: 100
+      training:
+        batch_size: 4                  # Keep low to prevent OOM
+        learning_rate: 0.00005
+        accumulate_grad_batches: 8     # Effective batch = 32
+        num_epochs: 500
+
+# =============================================================================
+# GLOBAL TRAINING DEFAULTS
+# Used if not overridden in sizes.{size}.training
+# =============================================================================
+training:
+  batch_size: 8
+  num_epochs: 300
+  learning_rate: 0.00005
+  weight_decay: 0.00001
+  num_workers: 4      # Optimized for 8 vCPU (leave cores for system/training)
+  accumulate_grad_batches: 1
+  
+  optimizer: "adam"
+  scheduler: "cosine"
+  warmup_epochs: 10
+  
+  save_every_n_epochs: 10
+  checkpoint_dir: "models"
+  
+  early_stopping:
+    enabled: true
+    patience: 75
+    monitor: "val/loss"
     
-    # Optimizer
-    optimizer: "adam"
-    scheduler: "cosine"
-    warmup_epochs: 10  # INCREASED: Gradual warmup for stable slow learning
-    
-    # Checkpointing
-    save_every_n_epochs: 10
-    checkpoint_dir: "models"
-    
-    # Early stopping
-    early_stopping:
-      enabled: true
-      patience: 75  # INCREASED: More patience for slower learning (was 50)
-      monitor: "val/loss"
-      
-    # Logging
-    log_dir: "logs"
-    log_every_n_steps: 50
-    
-  # Generation Settings
-  generation:
-    num_samples: 1
-    temperature: 1.0
-    guidance_scale: 1.0  # Classifier-free guidance weight
-    
-  # Hardware
-  hardware:
-    device: "cuda"  # cuda or cpu
-    num_workers: 16  # Synced with training settings
-    precision: "bf16-mixed"  # bfloat16 for L40S (better precision than fp16)
-    num_gpus: 1  # 1 for single GPU, -1 for ALL GPUs, [0,1,2] for specific GPUs
-    
-  # Block vocabulary (most common Minecraft blocks in nature assets)
-  # Note: mcschematic uses "_wood" not "_log" for tree trunks!
-  blocks:
+  log_dir: "logs"
+  log_every_n_steps: 50
+
+# =============================================================================
+# GENERATION SETTINGS
+# =============================================================================
+generation:
+  num_samples: 1
+  temperature: 1.0
+  guidance_scale: 1.0
+
+# =============================================================================
+# HARDWARE SETTINGS
+# =============================================================================
+hardware:
+  device: "cuda"
+  num_workers: 4        # Optimized for 8 vCPU
+  precision: "16-mixed" # 16-mixed is safer than bf16 for some PyTorch versions, but switch to bf16-mixed if possible
+  num_gpus: 1
+
+# =============================================================================
+# BLOCK VOCABULARY (shared across all sizes)
+# =============================================================================
+blocks:
     air: 0
     oak_leaves: 1  # Count: 513,807
     birch_leaves: 2  # Count: 122,651
