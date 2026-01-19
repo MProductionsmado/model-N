@@ -110,6 +110,18 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
         self.log('val/accuracy', accuracy, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
         
         return loss
+
+    def on_validation_epoch_end(self):
+        """Print metrics at end of epoch to console"""
+        if self.trainer.sanity_checking:
+             return
+             
+        metrics = self.trainer.callback_metrics
+        train_loss = metrics.get('train/loss_epoch', 0.0)
+        val_loss = metrics.get('val/loss', 0.0)
+        val_acc = metrics.get('val/accuracy', 0.0)
+        
+        print(f"\n[Epoch {self.current_epoch}] Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
     
     def configure_optimizers(self):
         """Configure optimizer and learning rate scheduler"""

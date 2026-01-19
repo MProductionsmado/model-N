@@ -51,7 +51,7 @@ model:
   sizes:
     # ----- NORMAL: Small structures (bushes, small rocks) -----
     # DIMENSIONS: 16x16x16 (4,096 voxels)
-    # VRAM USE: ~18-20 GB with batch 192
+    # VRAM USE: ~8-10 GB with batch 64 (Better Learning)
     normal:
       dims: [16, 16, 16]
       latent_dim: 128
@@ -62,7 +62,7 @@ model:
         attention_levels: [1, 2, 3]   # Full attention for quality
         sampling_steps: 50
       training:
-        batch_size: 192               # Increased again (was 128, only 69% VRAM)
+        batch_size: 64                # Reduced from 192 (Updates: 20/epoch vs 7/epoch)
         learning_rate: 0.0001
         accumulate_grad_batches: 1
         num_epochs: 200
