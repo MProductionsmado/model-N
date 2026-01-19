@@ -123,13 +123,17 @@ def main():
     batch_size = config['training']['batch_size']
     num_workers = config['training'].get('num_workers', 4)
     
-    # Create dataloaders
+    # Create dataloaders with optimized settings
+    # persistent_workers: Keep worker processes alive between epochs (reduces startup overhead)
+    # prefetch_factor: Load more batches in advance (reduces GPU wait time)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     val_loader = DataLoader(
@@ -137,7 +141,9 @@ def main():
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True if num_workers > 0 else False,
+        prefetch_factor=4 if num_workers > 0 else None
     )
     
     # Create model

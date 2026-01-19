@@ -51,7 +51,7 @@ model:
   sizes:
     # ----- NORMAL: Small structures (bushes, small rocks) -----
     # DIMENSIONS: 16x16x16 (4,096 voxels)
-    # VRAM USE: ~12-15 GB with batch 128
+    # VRAM USE: ~18-20 GB with batch 192
     normal:
       dims: [16, 16, 16]
       latent_dim: 128
@@ -62,7 +62,7 @@ model:
         attention_levels: [1, 2, 3]   # Full attention for quality
         sampling_steps: 50
       training:
-        batch_size: 128               # Doubled for RTX 4090 (was 64, only 38% VRAM)
+        batch_size: 192               # Increased again (was 128, only 69% VRAM)
         learning_rate: 0.0001
         accumulate_grad_batches: 1
         num_epochs: 200
@@ -112,7 +112,7 @@ training:
   num_epochs: 300
   learning_rate: 0.00005
   weight_decay: 0.00001
-  num_workers: 4      # Optimized for 8 vCPU (leave cores for system/training)
+  num_workers: 8      # Increased (was 4) - use all 8 vCPU for data loading
   accumulate_grad_batches: 1
   
   optimizer: "adam"
@@ -128,7 +128,7 @@ training:
     monitor: "val/loss"
     
   log_dir: "logs"
-  log_every_n_steps: 10  # Reduced (was 50, but we have ~20 batches)
+  log_every_n_steps: 1  # Set to 1 for small datasets (<20 batches)
 
 # =============================================================================
 # GENERATION SETTINGS
