@@ -67,19 +67,7 @@ else
 fi
 
 # =============================================================================
-# Step 3: Download Text Encoder Model
-# =============================================================================
-echo -e "\n${GREEN}[3/5] Downloading text encoder model...${NC}"
-
-if [ -f "scripts/download_model.py" ]; then
-    python scripts/download_model.py
-    echo -e "${GREEN}  ✓ Text encoder model downloaded${NC}"
-else
-    echo -e "${YELLOW}  ! download_model.py not found, skipping (model will download on first use)${NC}"
-fi
-
-# =============================================================================
-# Step 4: Preprocess Dataset
+# Step 3: Preprocess Dataset
 # =============================================================================
 echo -e "\n${GREEN}[4/5] Preprocessing schematic dataset...${NC}"
 
@@ -107,7 +95,7 @@ else
 fi
 
 # =============================================================================
-# Step 5: Start Training
+# Step 4: Start Training
 # =============================================================================
 echo -e "\n${GREEN}[5/5] Starting training...${NC}"
 echo -e "${BLUE}=============================================${NC}"
