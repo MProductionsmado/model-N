@@ -46,12 +46,12 @@ model:
 
   # =========================================================================
   # SIZE-SPECIFIC CONFIGURATIONS
-  # Optimized for NVIDIA A40 (48GB VRAM) - Cloud/Server Training
+  # Optimized for RTX 3090 (24GB VRAM) + 32 vCPU + 125GB RAM
   # =========================================================================
   sizes:
     # ----- NORMAL: Small structures (bushes, small rocks) -----
     # DIMENSIONS: 16x16x16 (4,096 voxels)
-    # VRAM USE: ~12 GB with batch 128
+    # VRAM USE: ~10 GB with batch 96
     normal:
       dims: [16, 16, 16]
       latent_dim: 128
@@ -62,14 +62,14 @@ model:
         attention_levels: [1, 2, 3]   # Full attention for quality
         sampling_steps: 50
       training:
-        batch_size: 128               # A40: 2x RTX 4090 batch
-        learning_rate: 0.0002         # Scale LR with batch size
+        batch_size: 96                # RTX 3090: Sweet spot for 24GB
+        learning_rate: 0.00015        # Scale LR with batch size
         accumulate_grad_batches: 1
         num_epochs: 200
 
     # ----- BIG: Standard trees, small houses -----
     # DIMENSIONS: 16x32x16 (8,192 voxels)
-    # VRAM USE: ~20 GB with batch 48
+    # VRAM USE: ~18 GB with batch 32
     big:
       dims: [16, 32, 16]
       latent_dim: 192
@@ -80,27 +80,27 @@ model:
         attention_levels: [2, 3]
         sampling_steps: 75
       training:
-        batch_size: 48                # A40: 2x RTX 4090 batch
-        learning_rate: 0.00012        # Scale LR with batch size
-        accumulate_grad_batches: 1    # No accumulation needed
+        batch_size: 32                # RTX 3090: Max for 24GB
+        learning_rate: 0.0001
+        accumulate_grad_batches: 1
         num_epochs: 300
 
     # ----- HUGE: Giant trees, complex builds -----
     # DIMENSIONS: 24x64x24 (36,864 voxels)
-    # VRAM USE: ~40 GB with batch 12
+    # VRAM USE: ~22 GB with batch 6
     huge:
       dims: [24, 64, 24]
       latent_dim: 256
       encoder:
-        channels: [64, 128, 256, 512] # A40: Full channels (was 384)
+        channels: [64, 128, 256, 384] # Reduced to fit 24GB VRAM
       diffusion:
         num_res_blocks: 3
-        attention_levels: [2, 3]      # A40: More attention layers (was [3])
+        attention_levels: [3]         # Only bottleneck attention (VRAM critical)
         sampling_steps: 100
       training:
-        batch_size: 12                 # A40: 3x RTX 4090 batch
-        learning_rate: 0.00008         # Scale LR with batch size
-        accumulate_grad_batches: 2     # Effective batch = 24
+        batch_size: 6                  # RTX 3090: Conservative for 24GB
+        learning_rate: 0.00006
+        accumulate_grad_batches: 4     # Effective batch = 24
         num_epochs: 500
 
 # =============================================================================
@@ -112,7 +112,8 @@ training:
   num_epochs: 300
   learning_rate: 0.00005
   weight_decay: 0.00001
-  num_workers: 8      # Increased (was 4) - use all 8 vCPU for data loading
+  num_workers: 16     # 32 vCPU: Use half for data loading (rest for system)
+  prefetch_factor: 4  # Aggressive prefetching with 125GB RAM
   accumulate_grad_batches: 1
   
   optimizer: "adam"
@@ -139,13 +140,15 @@ generation:
   guidance_scale: 1.0
 
 # =============================================================================
-# HARDWARE SETTINGS (Optimized for NVIDIA A40)
+# HARDWARE SETTINGS (Optimized for RTX 3090 + 32 vCPU + 125GB RAM)
 # =============================================================================
 hardware:
   device: "cuda"
-  num_workers: 8        # A40 servers usually have more CPUs
-  precision: "bf16-mixed" # A40 (Ampere) has native BF16 support - faster than FP16
+  num_workers: 16       # 32 vCPU: Half for data loading
+  precision: "bf16-mixed" # RTX 3090 (Ampere) has native BF16 support
   num_gpus: 1
+  pin_memory: true      # Faster CPU->GPU transfer with 125GB RAM
+  persistent_workers: true  # Keep workers alive between epochs
 
 # =============================================================================
 # BLOCK VOCABULARY (shared across all sizes)
