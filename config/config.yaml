@@ -46,61 +46,61 @@ model:
 
   # =========================================================================
   # SIZE-SPECIFIC CONFIGURATIONS
-  # Optimized for RTX 4090 (24GB VRAM) + 41GB RAM + 8 vCPU
+  # Optimized for NVIDIA A40 (48GB VRAM) - Cloud/Server Training
   # =========================================================================
   sizes:
     # ----- NORMAL: Small structures (bushes, small rocks) -----
     # DIMENSIONS: 16x16x16 (4,096 voxels)
-    # VRAM USE: ~8-10 GB with batch 64 (Better Learning)
+    # VRAM USE: ~12 GB with batch 128
     normal:
       dims: [16, 16, 16]
       latent_dim: 128
       encoder:
-        channels: [64, 128, 256, 512] # Standard channels ok for small size
+        channels: [64, 128, 256, 512]
       diffusion:
         num_res_blocks: 2
         attention_levels: [1, 2, 3]   # Full attention for quality
         sampling_steps: 50
       training:
-        batch_size: 64                # Reduced from 192 (Updates: 20/epoch vs 7/epoch)
-        learning_rate: 0.0001
+        batch_size: 128               # A40: 2x RTX 4090 batch
+        learning_rate: 0.0002         # Scale LR with batch size
         accumulate_grad_batches: 1
         num_epochs: 200
 
     # ----- BIG: Standard trees, small houses -----
     # DIMENSIONS: 16x32x16 (8,192 voxels)
-    # VRAM USE: Medium (~10-14 GB)
+    # VRAM USE: ~20 GB with batch 48
     big:
       dims: [16, 32, 16]
       latent_dim: 192
       encoder:
         channels: [64, 128, 256, 512]
       diffusion:
-        num_res_blocks: 3              # More depth for vertical structures
-        attention_levels: [2, 3]       # Attention only at lower resolutions
+        num_res_blocks: 3
+        attention_levels: [2, 3]
         sampling_steps: 75
       training:
-        batch_size: 24                 # Max out 24GB VRAM
-        learning_rate: 0.00008
-        accumulate_grad_batches: 2     # Effective batch = 48
+        batch_size: 48                # A40: 2x RTX 4090 batch
+        learning_rate: 0.00012        # Scale LR with batch size
+        accumulate_grad_batches: 1    # No accumulation needed
         num_epochs: 300
 
     # ----- HUGE: Giant trees, complex builds -----
     # DIMENSIONS: 24x64x24 (36,864 voxels)
-    # VRAM USE: High (~20-23 GB) - LIMIT!
+    # VRAM USE: ~40 GB with batch 12
     huge:
       dims: [24, 64, 24]
       latent_dim: 256
       encoder:
-        channels: [64, 128, 256, 384]  # Reduced last channel to save ~2GB VRAM
+        channels: [64, 128, 256, 512] # A40: Full channels (was 384)
       diffusion:
         num_res_blocks: 3
-        attention_levels: [3]          # Attn ONLY at bottleneck (critical for VRAM)
+        attention_levels: [2, 3]      # A40: More attention layers (was [3])
         sampling_steps: 100
       training:
-        batch_size: 4                  # Keep low to prevent OOM
-        learning_rate: 0.00005
-        accumulate_grad_batches: 8     # Effective batch = 32
+        batch_size: 12                 # A40: 3x RTX 4090 batch
+        learning_rate: 0.00008         # Scale LR with batch size
+        accumulate_grad_batches: 2     # Effective batch = 24
         num_epochs: 500
 
 # =============================================================================
@@ -139,12 +139,12 @@ generation:
   guidance_scale: 1.0
 
 # =============================================================================
-# HARDWARE SETTINGS
+# HARDWARE SETTINGS (Optimized for NVIDIA A40)
 # =============================================================================
 hardware:
   device: "cuda"
-  num_workers: 4        # Optimized for 8 vCPU
-  precision: "16-mixed" # 16-mixed is safer than bf16 for some PyTorch versions, but switch to bf16-mixed if possible
+  num_workers: 8        # A40 servers usually have more CPUs
+  precision: "bf16-mixed" # A40 (Ampere) has native BF16 support - faster than FP16
   num_gpus: 1
 
 # =============================================================================
