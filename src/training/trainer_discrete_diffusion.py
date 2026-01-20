@@ -35,10 +35,12 @@ class DiscreteDiffusionLightningModule(pl.LightningModule):
 
         # WEIGHTED LOSS IMPLEMENTATION
         # Air (index 0) is ~95% of data.
-        # Setting weight manually to 0.25 (balanced importance) to force model to learn emptiness but preserve thin structures.
+        # WEIGHT ADJUSTMENT HISTORY:
+        # 0.05 -> Solid Noise (Too loose)
+        # 0.25 -> Solid Cube (Too scared to predict Air)
+        # 1.00 -> Standard CrossEntropy. Best balance for sparsity.
         loss_weights = torch.ones(self.model.num_classes)
-        # 1.0 = All air (erasing branches), 0.05 = All Noise (solid blocks)
-        loss_weights[0] = 0.25  
+        loss_weights[0] = 1.0
         self.register_buffer('loss_weights', loss_weights)
     
     def forward(self, batch):
