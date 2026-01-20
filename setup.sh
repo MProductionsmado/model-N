@@ -10,6 +10,7 @@
 #   ./setup.sh huge         # Train only HUGE model (24x64x24)
 #   ./setup.sh all          # Train all three models sequentially
 #   ./setup.sh preprocess   # Only run preprocessing (no training)
+# git clone --branch v2-rtx4090-optimized --single-branch https://github.com/MProductionsmado/model-N
 # =============================================================================
 
 set -e  # Exit on any error
@@ -55,11 +56,6 @@ print_model_info() {
             ;;
     esac
 }
-
-apt update
-apt install screen
-screen -S train
-
 train_model() {
     local SIZE=$1
     print_header "Training $SIZE model"
@@ -117,7 +113,7 @@ pip install --upgrade pip --quiet
 echo -e "\n${GREEN}[2/4] Installing dependencies...${NC}"
 
 if [ -f "requirements.txt" ]; then
-    pip install -r requirements.txt --quiet
+    pip install -r requirements.txt
     echo -e "${GREEN}  ✓ Dependencies installed${NC}"
 else
     echo -e "${RED}  ✗ requirements.txt not found!${NC}"
