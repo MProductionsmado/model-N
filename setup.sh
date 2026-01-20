@@ -65,20 +65,29 @@ train_model() {
     CHECKPOINT_DIR="models/checkpoints/$SIZE"
     LAST_CHECKPOINT=$(ls -t $CHECKPOINT_DIR/*.ckpt 2>/dev/null | head -n1 || true)
     
+    # Build training command
+    local TRAIN_CMD="cd $SCRIPT_DIR && source venv/bin/activate && "
+    
     if [ -n "$LAST_CHECKPOINT" ]; then
         echo -e "\n${YELLOW}Found existing checkpoint: $LAST_CHECKPOINT${NC}"
         read -p "  Resume from this checkpoint? (Y/n): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-            python scripts/train_discrete_diffusion.py --size $SIZE --resume "$LAST_CHECKPOINT"
+            TRAIN_CMD+="python scripts/train_discrete_diffusion.py --size $SIZE --resume \"$LAST_CHECKPOINT\""
         else
-            python scripts/train_discrete_diffusion.py --size $SIZE
+            TRAIN_CMD+="python scripts/train_discrete_diffusion.py --size $SIZE"
         fi
     else
-        python scripts/train_discrete_diffusion.py --size $SIZE
+        TRAIN_CMD+="python scripts/train_discrete_diffusion.py --size $SIZE"
     fi
     
-    echo -e "${GREEN}  ✓ $SIZE model training complete${NC}"
+    # Start training in screen session
+    echo -e "${CYAN}Starting training in screen session 'train'...${NC}"
+    echo -e "${YELLOW}  To attach: screen -r train${NC}"
+    echo -e "${YELLOW}  To detach: Ctrl+A, then D${NC}"
+    screen -dmS train bash -c "$TRAIN_CMD; exec bash"
+    
+    echo -e "${GREEN}  ✓ Training started in background (screen -r train to view)${NC}"
 }
 
 # =============================================================================
@@ -87,6 +96,21 @@ train_model() {
 
 print_header "Minecraft 3D Asset Generator Setup"
 echo -e "${YELLOW}Working directory: $SCRIPT_DIR${NC}"
+
+# Install screen if not available
+if ! command -v screen &> /dev/null; then
+    echo -e "${YELLOW}Installing screen...${NC}"
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update && sudo apt-get install -y screen
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y screen
+    elif command -v pacman &> /dev/null; then
+        sudo pacman -S --noconfirm screen
+    fi
+    echo -e "${GREEN}  ✓ screen installed${NC}"
+else
+    echo -e "${GREEN}  ✓ screen already installed${NC}"
+fi
 
 # =============================================================================
 # Step 1: Create Virtual Environment
