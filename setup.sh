@@ -56,6 +56,10 @@ print_model_info() {
     esac
 }
 
+apt update
+apt install screen
+screen -S train
+
 train_model() {
     local SIZE=$1
     print_header "Training $SIZE model"
