@@ -561,7 +561,21 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         t = torch.randint(0, self.num_timesteps, (batch_size,), device=device, dtype=torch.long)
         
         # Forward diffusion WITH SIZE-SPECIFIC SCHEDULE
-        x_t = self.q_sample(x, t, size=size)
+        # q_sample returns soft probabilities (mixture of signal + uniform)
+        x_t_probs = self.q_sample(x, t, size=size)
+        
+        # CRITICAL FIX: Sample discrete states from the probabilities
+        # This matches the discrete generation process (D3PM)
+        # We reshape to (N, C) for multinomial sampling
+        B, C, D, H, W = x_t_probs.shape
+        x_t_flat = x_t_probs.permute(0, 2, 3, 4, 1).reshape(-1, C)
+        
+        # Sample indices
+        x_t_indices = torch.multinomial(x_t_flat, num_samples=1)
+        x_t_indices = x_t_indices.reshape(B, D, H, W)
+        
+        # Convert back to one-hot floats for UNet input
+        x_t = F.one_hot(x_t_indices, num_classes=self.num_classes).permute(0, 4, 1, 2, 3).float()
         
         # Project embeddings
         time_embed = self.time_embed(t.float())
