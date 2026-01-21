@@ -697,8 +697,11 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         # Project text embeddings once
         text_proj = self.text_proj(text_embed)
         
-        # Start from uniform distribution over classes (soft probabilities)
-        x = torch.ones(num_samples, self.num_classes, D, H, W, device=device) / self.num_classes
+        # Start from RANDOM NOISE (Categorical Prior)
+        # Instead of uniform probabilities, we start with a sample from the prior
+        # This matches the training assumption where x_t is always a discrete state (one-hot)
+        x_indices = torch.randint(0, self.num_classes, (num_samples, D, H, W), device=device)
+        x = F.one_hot(x_indices, num_classes=self.num_classes).permute(0, 4, 1, 2, 3).float()
         
         # Determine timesteps
         if sampling_steps is None:
@@ -709,24 +712,41 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
                 self.num_timesteps - 1, 0, sampling_steps, dtype=torch.long, device=device
             ).tolist()
         
-        # Iterative denoising - KEEP SOFT PROBABILITIES until final step
+        # Iterative denoising
         for i, t in enumerate(timesteps):
             t_batch = torch.full((num_samples,), int(t), device=device, dtype=torch.long)
             
             # Get posterior probabilities p(x_{t-1} | x_t)
-            x = self.p_sample(x, t_batch, text_embed, text_proj, size, guidance_scale=guidance_scale)
+            # x is always one-hot encoded here
+            posterior = self.p_sample(x, t_batch, text_embed, text_proj, size, guidance_scale=guidance_scale)
             
-            # Only do hard sampling at the FINAL step
-            # This prevents error accumulation during denoising
-        
-        # FINAL STEP: Apply temperature, top-k, top-p and sample discretely
-        B, C, D, H, W = x.shape
-        probs_flat = x.permute(0, 2, 3, 4, 1).reshape(-1, C)  # (B*D*H*W, C)
-        
-        sampled_indices = improved_sampling(probs_flat, temperature, top_k, top_p)
-        sampled_indices = sampled_indices.reshape(B, D, H, W)
-        
-        # Convert to one-hot for output
-        x = F.one_hot(sampled_indices.long(), num_classes=self.num_classes).permute(0, 4, 1, 2, 3).float()
+            # SAMPLE from the posterior distribution
+            # This is critical: Discrete diffusion requires sampling at each step
+            # to maintain the "one-hot" manifold the UNet was trained on.
+            
+            # Apply temperature if needed (sharpen/flatten distribution)
+            if temperature != 1.0:
+                 posterior = posterior ** (1.0 / temperature)
+                 posterior = posterior / (posterior.sum(dim=1, keepdim=True) + 1e-8)
+
+            B, C, D, H, W = posterior.shape
+            probs_flat = posterior.permute(0, 2, 3, 4, 1).reshape(-1, C)
+            
+            # Determine sampling strategy for this step
+            # We use noise at intermediate steps, but can be deterministic at the very end
+            is_last_step = (i == len(timesteps) - 1)
+            
+            if is_last_step:
+                 # Final step: Use improved sampling (top-k/p) for best quality
+                 sampled_indices = improved_sampling(probs_flat, temperature=1.0, top_k=top_k, top_p=top_p)
+            else:
+                 # Intermediate steps: Standard multinomial sampling
+                 # We keep it stochastic to explore the distribution
+                 sampled_indices = torch.multinomial(probs_flat, 1).squeeze(-1)
+            
+            sampled_indices = sampled_indices.reshape(B, D, H, W)
+            
+            # Convert to one-hot for next step
+            x = F.one_hot(sampled_indices.long(), num_classes=self.num_classes).permute(0, 4, 1, 2, 3).float()
         
         return x
