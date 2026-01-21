@@ -662,6 +662,10 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
     ) -> torch.Tensor:
         """
         Generate samples using reverse diffusion with Classifier-Free Guidance
+        
+        FIXED: Keep probability distributions through the denoising process,
+        only sample discretely at the final step. This prevents error accumulation
+        and allows the model to smoothly refine its predictions.
         """
         device = text_embed.device
         size = self.target_size
@@ -693,7 +697,7 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
         # Project text embeddings once
         text_proj = self.text_proj(text_embed)
         
-        # Start from uniform distribution over classes
+        # Start from uniform distribution over classes (soft probabilities)
         x = torch.ones(num_samples, self.num_classes, D, H, W, device=device) / self.num_classes
         
         # Determine timesteps
@@ -705,19 +709,24 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
                 self.num_timesteps - 1, 0, sampling_steps, dtype=torch.long, device=device
             ).tolist()
         
-        # Iterative denoising with CFG and IMPROVED SAMPLING
-        for t in timesteps:
-            t_batch = torch.full((num_samples,), t, device=device, dtype=torch.long)
-            probs = self.p_sample(x, t_batch, text_embed, text_proj, size, guidance_scale=guidance_scale)
+        # Iterative denoising - KEEP SOFT PROBABILITIES until final step
+        for i, t in enumerate(timesteps):
+            t_batch = torch.full((num_samples,), int(t), device=device, dtype=torch.long)
             
-            # Apply improved sampling with top-k/top-p
-            B, C, D, H, W = probs.shape
-            probs_flat = probs.permute(0, 2, 3, 4, 1).reshape(-1, C)  # (B*D*H*W, C)
+            # Get posterior probabilities p(x_{t-1} | x_t)
+            x = self.p_sample(x, t_batch, text_embed, text_proj, size, guidance_scale=guidance_scale)
             
-            sampled_indices = improved_sampling(probs_flat, temperature, top_k, top_p)
-            sampled_indices = sampled_indices.reshape(B, D, H, W)
-            
-            # Convert back to one-hot distribution
-            x = F.one_hot(sampled_indices.long(), num_classes=self.num_classes).permute(0, 4, 1, 2, 3).float()
+            # Only do hard sampling at the FINAL step
+            # This prevents error accumulation during denoising
+        
+        # FINAL STEP: Apply temperature, top-k, top-p and sample discretely
+        B, C, D, H, W = x.shape
+        probs_flat = x.permute(0, 2, 3, 4, 1).reshape(-1, C)  # (B*D*H*W, C)
+        
+        sampled_indices = improved_sampling(probs_flat, temperature, top_k, top_p)
+        sampled_indices = sampled_indices.reshape(B, D, H, W)
+        
+        # Convert to one-hot for output
+        x = F.one_hot(sampled_indices.long(), num_classes=self.num_classes).permute(0, 4, 1, 2, 3).float()
         
         return x
