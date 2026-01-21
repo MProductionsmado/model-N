@@ -698,13 +698,15 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
             else:
                 top_k = 10
         
+        # RELAXED Top-P:
+        # Prevents masking out rare but correct blocks (like a trunk base surrounded by air)
         if top_p >= 1.0:
             if max_dim <= 16:
-                top_p = 0.9
+                top_p = 0.99  # Was 0.9 - caused floating trees (censored sparse trunks)
             elif max_dim <= 32:
-                top_p = 0.85
+                top_p = 0.95
             else:
-                top_p = 0.8
+                top_p = 0.92
         
         print(f"Adaptive sampling for {size}: temp={temperature:.2f}, top_k={top_k}, top_p={top_p}")
         
@@ -747,16 +749,15 @@ class DiscreteDiscreteDiffusionModel3D(nn.Module):
             probs_flat = posterior.permute(0, 2, 3, 4, 1).reshape(-1, C)
             
             # Determine sampling strategy for this step
-            # We use noise at intermediate steps, but can be deterministic at the very end
-            is_last_step = (i == len(timesteps) - 1)
-            
-            if is_last_step:
-                 # Final step: Use improved sampling (top-k/p) for best quality
-                 sampled_indices = improved_sampling(probs_flat, temperature=1.0, top_k=top_k, top_p=top_p)
-            else:
-                 # Intermediate steps: Standard multinomial sampling
-                 # We keep it stochastic to explore the distribution
-                 sampled_indices = torch.multinomial(probs_flat, 1).squeeze(-1)
+            # Use improved sampling (top-k/p) for ALL steps to maintain structure
+            # This helps prevent "floating" structures by avoiding low-probability air tokens
+            # in critical structural positions (like the base of a tree)
+            sampled_indices = improved_sampling(
+                probs_flat, 
+                temperature=temperature, 
+                top_k=top_k, 
+                top_p=top_p
+            )
             
             sampled_indices = sampled_indices.reshape(B, D, H, W)
             
